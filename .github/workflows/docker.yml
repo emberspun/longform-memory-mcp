@@ -1,0 +1,123 @@
+# 构建多架构镜像，推 GHCR 与 Docker Hub。
+#
+# ## 两个目标不是一回事
+#
+# - **GHCR** (`ghcr.io/emberspun/…`)：零配置，用仓库自带的 GITHUB_TOKEN。
+#   纯分发口，GitHub 的链接全是 nofollow，外链账上记 0。
+# - **Docker Hub**：**详情页实测 89 条站外链接全 dofollow**，是这条线上
+#   最值钱的平台之一。需要账号与访问令牌。
+#
+# ## Docker Hub 一次性设置（在网页上做，不在这里）
+#
+#   1. hub.docker.com 注册，**用户名取 `emberspun`**（它就是镜像前缀，
+#      与 GitHub 组织、npm scope 保持一致；08-15 查过还空着）
+#   2. Account Settings → Personal access tokens → 新建，权限 Read & Write
+#   3. 本仓库 Settings → Secrets and variables → Actions 加两条：
+#        DOCKERHUB_USERNAME = emberspun
+#        DOCKERHUB_TOKEN    = <上一步那个令牌>
+#   4. 仓库描述里放产品页链接 —— **那才是这一趟真正要拿的东西**，
+#      镜像本身在 Docker Hub 上不会自动带上任何我们的链接
+#
+# 🚨 **没配 secret 时不许让流水线变红**：Docker Hub 那几步全部挂了条件。
+# 一条会红的流水线只会训练人无视流水线，而这个 job 是可选的。
+#
+# 🚨 **必须多架构**：MCP server 的使用者大量在 Apple Silicon 上。
+# 只推 amd64 的话，他们 `docker run` 会走 QEMU 模拟，慢到像坏了。
+
+name: Docker
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+env:
+  IMAGE: longform-memory-mcp
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # ← GHCR 要它
+    env:
+      # 🚨 不要在 step 的 `if:` 里直接写 `secrets.X`。secrets 上下文在
+      # 条件表达式里的可用性随 runner 版本变过，而失败形态是「条件恒为假、
+      # 那几步永远静默跳过」—— 全绿，什么都没推。折到 job 级 env 再判，
+      # 这个写法在任何版本上都成立。
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # arm64 靠 QEMU 交叉构建 —— runner 本身是 amd64
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 条件登录：没配 secret 就整步跳过，不报错
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Compose tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE }}
+            name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE }},enable=${{ secrets.DOCKERHUB_USERNAME != '' }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # 手动触发（非 tag）时上面三条一条都不产出，tags 会是空的 —— 那样
+            # build-push 推了个寂寞，而且看不出来。给非 tag 运行一个 edge 兜底，
+            # 这条流水线才有办法在打 tag 之前先验一次。
+            type=raw,value=edge,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+          labels: |
+            org.opencontainers.image.title=longform-memory-mcp
+            org.opencontainers.image.description=MCP server giving your AI writing assistant a constant-size memory of a long document. Local-only: no account, no API key, no network.
+            org.opencontainers.image.url=https://emberspun.com/open-source/longform-memory
+            org.opencontainers.image.documentation=https://emberspun.com/open-source/longform-memory
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 镜像跑不起来的话，推上去只是把坏东西发得更远
+      - name: Smoke test the pushed image
+        run: |
+          IMG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          echo "testing $IMG"
+          REQ='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
+          OUT=$(printf '%s\n' "$REQ" | docker run -i --rm "$IMG" | head -1)
+          echo "$OUT"
+          echo "$OUT" | grep -q '"serverInfo"' || { echo "::error::推上去的镜像答不出 initialize"; exit 1; }
+
+      # Docker Hub 的仓库说明不会自动同步，而**产品页链接就放在那里**
+      - name: Sync the Docker Hub description
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE }}
+          short-description: 'Constant-size memory for long-form AI writing. Chapter 1000 costs the same tokens as chapter 10.'
+          readme-filepath: ./README.md
