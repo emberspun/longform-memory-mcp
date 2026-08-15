@@ -198,7 +198,7 @@ The test suite spawns the built binary and speaks JSON-RPC to it, because the fa
 
 ## License
 
-MIT © Emberspun
+MIT © Emberspun. Built for [Emberspun, an AI book writer for self-publishers](https://emberspun.com) — this memory layer runs there on every chapter.
 
 ## Claude Skill
 
