@@ -96,8 +96,12 @@ jobs:
       - name: Export digest
         run: |
           mkdir -p /tmp/digests
-          touch "/tmp/digests/${{ steps.build.outputs.digest }}"
-          echo "${{ steps.build.outputs.digest }}"
+          # 🚨 必须剥掉 `sha256:` 前缀再当文件名 —— upload-artifact 拒收带冒号的
+          # 路径（"Contains the following character: Colon :"）。下面 merge 那步
+          # 用 `@sha256:%s` 把前缀拼回去，所以这里存的就该是裸哈希。
+          DIGEST="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${DIGEST#sha256:}"
+          echo "$DIGEST"
 
       - uses: actions/upload-artifact@v4
         with:
