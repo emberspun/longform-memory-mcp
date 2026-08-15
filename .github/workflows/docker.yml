@@ -10,19 +10,28 @@
 # ## Docker Hub 一次性设置（在网页上做，不在这里）
 #
 #   1. hub.docker.com 注册，**用户名取 `emberspun`**（它就是镜像前缀，
-#      与 GitHub 组织、npm scope 保持一致；08-15 查过还空着）
+#      与 GitHub 组织保持一致；08-15 查过还空着）
 #   2. Account Settings → Personal access tokens → 新建，权限 Read & Write
 #   3. 本仓库 Settings → Secrets and variables → Actions 加两条：
 #        DOCKERHUB_USERNAME = emberspun
 #        DOCKERHUB_TOKEN    = <上一步那个令牌>
-#   4. 仓库描述里放产品页链接 —— **那才是这一趟真正要拿的东西**，
-#      镜像本身在 Docker Hub 上不会自动带上任何我们的链接
+#   4. 仓库说明由本流水线自动同步 README，**产品页链接就靠它带上去**
 #
 # 🚨 **没配 secret 时不许让流水线变红**：Docker Hub 那几步全部挂了条件。
 # 一条会红的流水线只会训练人无视流水线，而这个 job 是可选的。
 #
-# 🚨 **必须多架构**：MCP server 的使用者大量在 Apple Silicon 上。
-# 只推 amd64 的话，他们 `docker run` 会走 QEMU 模拟，慢到像坏了。
+# ## 🚨 为什么是「每架构一个原生 runner」而不是 QEMU
+#
+# 最初写成单 job + `platforms: linux/amd64,linux/arm64`（QEMU 交叉编译）。
+# **实测跑了 20 分钟还没完，被迫取消** —— Dockerfile 里两个 stage 各跑一次
+# `npm ci`，在模拟器里慢到不可用，而每次发版都要付这个代价。
+#
+# 现在改成：两个原生 runner 各自构建并**按 digest 推**，最后一个 job 把
+# 两份 digest 合并成 manifest list。公开仓库的 `ubuntu-24.04-arm` 是免费的。
+# YAML 复杂了一截，换来的是发版从 20 分钟降到几分钟。
+#
+# ⚠️ **不能只推 amd64**：MCP server 的使用者大量在 Apple Silicon 上，
+# 没有 arm64 层他们 `docker run` 会走模拟，慢到像坏了。
 
 name: Docker
 
@@ -33,24 +42,26 @@ on:
 
 env:
   IMAGE: longform-memory-mcp
+  GHCR: ghcr.io/${{ github.repository_owner }}/longform-memory-mcp
 
 jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm # 原生，不走 QEMU
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
-      packages: write # ← GHCR 要它
+      packages: write
     env:
-      # 🚨 不要在 step 的 `if:` 里直接写 `secrets.X`。secrets 上下文在
-      # 条件表达式里的可用性随 runner 版本变过，而失败形态是「条件恒为假、
-      # 那几步永远静默跳过」—— 全绿，什么都没推。折到 job 级 env 再判，
-      # 这个写法在任何版本上都成立。
       HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' }}
     steps:
       - uses: actions/checkout@v5
-
-      # arm64 靠 QEMU 交叉构建 —— runner 本身是 amd64
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
@@ -60,7 +71,66 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 条件登录：没配 secret 就整步跳过，不报错
+      # 🚨 别在 step 的 `if:` 里直接写 `secrets.X`。那个上下文在条件表达式里的
+      # 可用性变过，而失败形态是「条件恒为假、静默跳过」—— 全绿，什么都没推。
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 每个架构先只推「无标签的 digest」，标签留给下面的 merge job 统一打。
+      # 两个 job 各自打同一个标签的话，后完成的那个会把先完成的顶掉，
+      # 于是 manifest 里只剩一个架构 —— 而且看起来完全正常。
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.GHCR }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${{ steps.build.outputs.digest }}"
+          echo "${{ steps.build.outputs.digest }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          retention-days: 1
+          if-no-files-found: error
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Log in to Docker Hub
         if: env.HAS_DOCKERHUB == 'true'
         uses: docker/login-action@v4
@@ -73,14 +143,14 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: |
-            ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE }}
+            ${{ env.GHCR }}
             name=docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE }},enable=${{ secrets.DOCKERHUB_USERNAME != '' }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            # 手动触发（非 tag）时上面三条一条都不产出，tags 会是空的 —— 那样
-            # build-push 推了个寂寞，而且看不出来。给非 tag 运行一个 edge 兜底，
+            # 手动触发（非 tag）时上面三条一条都不产出，tags 会是空的 ——
+            # 那样推了个寂寞而且看不出来。给非 tag 运行一个 edge 兜底，
             # 这条流水线才有办法在打 tag 之前先验一次。
             type=raw,value=edge,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
           labels: |
@@ -90,26 +160,31 @@ jobs:
             org.opencontainers.image.documentation=https://emberspun.com/open-source/longform-memory
             org.opencontainers.image.licenses=MIT
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      # 镜像跑不起来的话，推上去只是把坏东西发得更远
-      - name: Smoke test the pushed image
+      - name: Create the manifest list
+        working-directory: /tmp/digests
         run: |
-          IMG=$(echo "${{ steps.meta.outputs.tags }}" | head -1)
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< '${{ steps.meta.outputs.json }}') \
+            $(printf '${{ env.GHCR }}@sha256:%s ' *)
+
+      # 推一个跑不起来的镜像，只是把坏东西发得更远。
+      - name: Smoke test the published image
+        run: |
+          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
           echo "testing $IMG"
           REQ='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
           OUT=$(printf '%s\n' "$REQ" | docker run -i --rm "$IMG" | head -1)
           echo "$OUT"
           echo "$OUT" | grep -q '"serverInfo"' || { echo "::error::推上去的镜像答不出 initialize"; exit 1; }
+
+      - name: Both architectures must be in the manifest
+        run: |
+          IMG=$(echo '${{ steps.meta.outputs.tags }}' | head -1)
+          ARCHES=$(docker buildx imagetools inspect "$IMG" --raw | jq -r '.manifests[].platform | select(.os=="linux") | .architecture' | sort -u | tr '\n' ' ')
+          echo "architectures: $ARCHES"
+          # 断言两个都在。少一个不会报错，只会让一半用户跑得莫名其妙地慢。
+          echo "$ARCHES" | grep -q amd64 || { echo "::error::manifest 里没有 amd64"; exit 1; }
+          echo "$ARCHES" | grep -q arm64 || { echo "::error::manifest 里没有 arm64"; exit 1; }
 
       # Docker Hub 的仓库说明不会自动同步，而**产品页链接就放在那里**
       - name: Sync the Docker Hub description
