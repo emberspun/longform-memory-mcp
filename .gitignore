@@ -1,0 +1,30 @@
+# credentials — keep this group in sync with the sibling repos
+.env
+.env.*
+!.env.example
+.npmrc
+*.pem
+*.key
+id_rsa*
+
+# local memory / data
+*.db
+*.sqlite
+*.sqlite3
+data/
+.longform-memory/
+*.jsonl
+
+# build + deps
+node_modules/
+dist/
+*.tgz
+
+# tooling noise
+*.log
+npm-debug.log*
+.DS_Store
+.vscode/
+.idea/
+coverage/
+.vitest/

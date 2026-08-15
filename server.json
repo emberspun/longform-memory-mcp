@@ -1,0 +1,33 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.emberspun/longform-memory-mcp",
+  "description": "Constant-size memory for writing a long document. Chapter 1000 costs the same tokens as chapter 10. Runs locally: no account, no API key, no network.",
+  "version": "0.1.0",
+  "websiteUrl": "https://emberspun.com/open-source/longform-memory",
+  "repository": {
+    "url": "https://github.com/emberspun/longform-memory-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "longform-memory-mcp",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        {
+          "name": "LONGFORM_MEMORY_PROJECT",
+          "description": "Which document this memory belongs to. One name per book.",
+          "isRequired": false,
+          "default": "default"
+        },
+        {
+          "name": "LONGFORM_MEMORY_HOME",
+          "description": "Where memory is stored. Defaults to ~/.longform-memory.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

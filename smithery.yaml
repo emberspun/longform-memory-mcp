@@ -1,0 +1,31 @@
+# Smithery configuration — https://smithery.ai/docs/config#smitheryyaml
+#
+# Legacy `startCommand` form on purpose, NOT `runtime: typescript`.
+# The typescript runtime is for servers built on @smithery/sdk and deployed to
+# Smithery's own infrastructure; the two forms are mutually exclusive and mixing
+# them is a common deploy failure.
+#
+# ⚠️ This server keeps its memory in local files. Run it on the user's machine,
+# where the memory outlives the session — a hosted container would hand every
+# session an empty book.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    properties:
+      project:
+        type: string
+        title: Project
+        description: >-
+          Which document this memory belongs to. Use one name per book and keep
+          it identical across sessions.
+        default: default
+    required: []
+  commandFunction: |-
+    (config) => ({
+      command: "npx",
+      args: ["-y", "longform-memory-mcp@latest"],
+      env: config.project ? { LONGFORM_MEMORY_PROJECT: config.project } : {}
+    })
+  exampleConfig:
+    project: my-novel

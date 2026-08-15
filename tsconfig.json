@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "sourceMap": false,
+    "outDir": "dist"
+  },
+  // `rootDir` lives in tsconfig.build.json only. Setting it here would make
+  // `tsc --noEmit` reject the tests for sitting outside src/ — and the usual
+  // reflex, dropping test/ from `include`, silently stops type-checking them.
+  "include": ["src", "test"]
+}
