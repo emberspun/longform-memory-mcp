@@ -202,10 +202,16 @@ MIT © Emberspun
 
 ## Claude Skill
 
-[`skill/SKILL.md`](./skill/SKILL.md) teaches a model **when** to call which tool —
-the rhythm (recall → check threads → draft → remember), what a summary worth
-storing looks like, and the failure modes that only show up 300 chapters later.
+Tool descriptions tell a model what a call returns. They cannot tell it that
+recalling *after* drafting is useless, or that a `[T3]` from one chapter must not
+be quoted at another. That is sequencing and judgement, and it lives in a skill:
 
-Drop the `skill/` directory into `~/.claude/skills/longform-writing/`, or point
-your client at it. It is useless without the server above, which is why it ships
-here rather than in a repository of its own.
+**[emberspun/longform-memory-skill](https://github.com/emberspun/longform-memory-skill)**
+
+```bash
+git clone https://github.com/emberspun/longform-memory-skill.git \
+  ~/.claude/skills/longform-writing
+```
+
+Kept in its own repository so there is exactly one copy — the same text in two
+places drifts, and the stale one is the one somebody reads.
