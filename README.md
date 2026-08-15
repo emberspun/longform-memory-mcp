@@ -199,3 +199,13 @@ The test suite spawns the built binary and speaks JSON-RPC to it, because the fa
 ## License
 
 MIT © Emberspun
+
+## Claude Skill
+
+[`skill/SKILL.md`](./skill/SKILL.md) teaches a model **when** to call which tool —
+the rhythm (recall → check threads → draft → remember), what a summary worth
+storing looks like, and the failure modes that only show up 300 chapters later.
+
+Drop the `skill/` directory into `~/.claude/skills/longform-writing/`, or point
+your client at it. It is useless without the server above, which is why it ships
+here rather than in a repository of its own.

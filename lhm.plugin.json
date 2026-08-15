@@ -1,0 +1,307 @@
+{
+  "author": "Emberspun",
+  "description": "MCP server that gives your AI writing assistant a constant-size memory of a long document. Chapter 1000 costs the same tokens as chapter 10. Local-only: no account, no API key, no network.",
+  "homepage": "https://emberspun.com/open-source/longform-memory",
+  "identifier": "emberspun-longform-memory-mcp",
+  "name": "longform-memory",
+  "prompts": [],
+  "resources": [],
+  "tags": [
+    "mcp",
+    "modelcontextprotocol",
+    "mcp-server",
+    "claude",
+    "cursor",
+    "llm",
+    "long-context",
+    "context-window",
+    "token-budget",
+    "memory",
+    "ai-writing",
+    "continuity",
+    "novel",
+    "local-first"
+  ],
+  "tools": [
+    {
+      "name": "remember_chapter",
+      "title": "Remember a chapter",
+      "description": "Fold a finished chapter into the document memory.\n\nBefore calling, read the chapter and produce:\n  · summary — 2-4 sentences. What CHANGED, not what happened. This is the\n    single biggest lever on recall quality months from now.\n  · entities — every character/place/object whose state moved, with its\n    state as of the end of this chapter.\n  · threads — promises made to the reader. Open new ones; advance or\n    resolve existing ones by their [T#] from list_open_threads.\n\nPassing `text` as well stores the prose locally, which is what lets\ncheck_continuity quote the exact sentence it tripped on later.\nCalling again for the same chapter replaces its summary — safe to redo after a revision.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Which document this is. Omit to use LONGFORM_MEMORY_PROJECT (default: \"default\"). Use one name per book and keep it identical across calls — a typo silently starts a new, empty memory.",
+            "type": "string"
+          },
+          "chapter": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "1-based chapter number."
+          },
+          "summary": {
+            "type": "string"
+          },
+          "text": {
+            "description": "Full prose. Stored locally, never uploaded.",
+            "type": "string"
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Exactly as written in the prose."
+                },
+                "state": {
+                  "type": "string",
+                  "description": "Short factual state at the end of this chapter: \"hiding in the cellar, arm broken\"."
+                },
+                "gone": {
+                  "description": "true = died / was destroyed / left for good. false = explicitly back after having been gone (this is how you silence a continuity warning you have decided is intentional). Omit when the chapter says nothing about presence.",
+                  "type": "boolean"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "state"
+              ]
+            }
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "description": "Default \"open\".",
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "progress",
+                    "resolve"
+                  ]
+                },
+                "ref": {
+                  "description": "For progress/resolve: the [T#] from the most recent list_open_threads call at THIS chapter number. An unrecognised ref is skipped, never guessed at.",
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "One line: what is promised and still owed."
+                },
+                "threadType": {
+                  "type": "string"
+                },
+                "deadlineChapter": {
+                  "description": "Chapter this should pay off by. 0 or absent means \"by the ending\".",
+                  "type": "number"
+                },
+                "resolutionNote": {
+                  "description": "For resolve: how it paid off.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "summary"
+              ]
+            }
+          },
+          "totalChapters": {
+            "description": "Planned length, if known. Used to give new threads a sane deadline.",
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "chapter"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "recall_context",
+      "title": "Recall context for a chapter",
+      "description": "THE main tool. Returns one paste-ready block holding everything worth\nknowing before writing this chapter: entity states, the last few chapter\nsummaries, a sampled skeleton of the whole arc, and older material\nretrieved as relevant.\n\nThe block is a constant size no matter how long the document is —\nchapter 1000 costs the same tokens as chapter 10. Per-section token\naccounting comes back with it, so when something is missing you can see\nwhich section ran out of room rather than guessing.\n\nCall this BEFORE drafting, not after.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Which document this is. Omit to use LONGFORM_MEMORY_PROJECT (default: \"default\"). Use one name per book and keep it identical across calls — a typo silently starts a new, empty memory.",
+            "type": "string"
+          },
+          "chapter": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991,
+            "description": "The chapter about to be written."
+          },
+          "budget": {
+            "description": "Token ceiling for the block (default 6000). Resist raising it far: long contexts make models skip the middle.",
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 9007199254740991
+          },
+          "query": {
+            "description": "What this chapter is about — sharpens retrieval. Defaults to the previous chapter's summary.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "chapter"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "list_open_threads",
+      "title": "List unresolved threads",
+      "description": "What the document has promised the reader and not yet delivered, most\nurgent first, with overdue ones flagged and at most one marked as due now.\n\nThe [T#] numbering is what remember_chapter matches `ref` against, and it\nis only valid for the chapter number you pass here — list again if you move on.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Which document this is. Omit to use LONGFORM_MEMORY_PROJECT (default: \"default\"). Use one name per book and keep it identical across calls — a typo silently starts a new, empty memory.",
+            "type": "string"
+          },
+          "chapter": {
+            "description": "Defaults to the latest chapter on record.",
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "totalChapters": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "check_continuity",
+      "title": "Check continuity",
+      "description": "Find places where the document contradicts its own record: a character\nwho left the story and then acts again, a thread past its deadline.\n\nFindings are labelled \"certain\" (two recorded facts disagree) or \"likely\"\n(matched the prose — flashbacks and hearsay are possible, so the offending\nsentence is quoted for you to judge).\n\nIt does NOT look for semantic contradictions — that needs a reader, which\nis you. This covers the part you cannot do: remembering exactly, across\na thousand chapters.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Which document this is. Omit to use LONGFORM_MEMORY_PROJECT (default: \"default\"). Use one name per book and keep it identical across calls — a typo silently starts a new, empty memory.",
+            "type": "string"
+          },
+          "fromChapter": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "toChapter": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          }
+        },
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "entity_card",
+      "title": "Entity card",
+      "description": "Everything on record about one character, place or object: its current state and the chapter-by-chapter timeline of how it got there. Names match case-insensitively.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Which document this is. Omit to use LONGFORM_MEMORY_PROJECT (default: \"default\"). Use one name per book and keep it identical across calls — a typo silently starts a new, empty memory.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "search_memory",
+      "title": "Search memory",
+      "description": "Find chapters by what happened in them, reaching past the recent window.\n\nLexical (BM25) by default and offline. Becomes true semantic search when\nLONGFORM_MEMORY_EMBED_URL / _KEY / _MODEL are configured — with your own\nendpoint, not ours. The reply always states which mode actually ran.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Which document this is. Omit to use LONGFORM_MEMORY_PROJECT (default: \"default\"). Use one name per book and keep it identical across calls — a typo silently starts a new, empty memory.",
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "k": {
+            "description": "Default 6.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "$schema": "http://json-schema.org/draft-07/schema#"
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    }
+  ],
+  "version": "0.1.0"
+}
