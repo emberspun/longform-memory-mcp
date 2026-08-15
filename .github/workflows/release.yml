@@ -72,14 +72,29 @@ jobs:
           echo "package.json=$PKG  tag=$TAG"
           [ "$PKG" = "$TAG" ] || { echo "::error::tag v$TAG 与 package.json $PKG 不一致"; exit 1; }
 
-      # server.json 也钉着版本号，目录站读的是它。漏改 = 注册表显示旧版本。
-      - name: server.json must match too
+      # 🚨 版号在这个仓库里写了 **5 份**，而它们分别被不同的东西读：
+      #   package.json          → npm
+      #   server.json ×2        → 官方 MCP 注册表
+      #   lhm.plugin.json       → LobeHub 上架
+      #   src/server.ts         → **MCP 握手时报给客户端的那个**
+      # 漏改任何一份都不会报错，只会让某个下游永远显示旧版本。
+      # 最阴的是 src/server.ts：它只在客户端握手里露面，本地跑测试看不出来。
+      - name: Every version declaration must agree
         run: |
           PKG=$(node -p "require('./package.json').version")
-          SRV=$(node -p "require('./server.json').version")
-          SRVPKG=$(node -p "require('./server.json').packages[0].version")
-          echo "package.json=$PKG  server.json=$SRV  packages[0]=$SRVPKG"
-          [ "$PKG" = "$SRV" ] && [ "$PKG" = "$SRVPKG" ] || { echo "::error::server.json 版本号与 package.json 不一致"; exit 1; }
+          declare -A SEEN=(
+            ["server.json"]="$(node -p "require('./server.json').version")"
+            ["server.json:packages[0]"]="$(node -p "require('./server.json').packages[0].version")"
+            ["lhm.plugin.json"]="$(node -p "require('./lhm.plugin.json').version")"
+            ["src/server.ts"]="$(node -p "require('fs').readFileSync('src/server.ts','utf8').match(/SERVER_VERSION = '([^']+)'/)[1]")"
+          )
+          echo "package.json = $PKG"
+          FAIL=0
+          for k in "${!SEEN[@]}"; do
+            echo "  $k = ${SEEN[$k]}"
+            [ "${SEEN[$k]}" = "$PKG" ] || { echo "::error::$k 是 ${SEEN[$k]}，与 package.json 的 $PKG 不一致"; FAIL=1; }
+          done
+          exit $FAIL
 
       # 不传 --otp、不设 NODE_AUTH_TOKEN：凭据由 OIDC 现换
       - name: Publish

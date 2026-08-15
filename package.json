@@ -1,6 +1,6 @@
 {
   "name": "longform-memory-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server that gives your AI writing assistant a constant-size memory of a long document. Chapter 1000 costs the same tokens as chapter 10. Local-only: no account, no API key, no network.",
   "keywords": [
     "mcp",
